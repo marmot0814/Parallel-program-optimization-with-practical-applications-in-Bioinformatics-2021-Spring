@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <vector>
 
 #include <random>
 #include <cstdlib>
@@ -28,12 +29,16 @@ int main() {
   srand(time(0));
   ThreadPool thread_pool(5);
 
+  std::vector<std::future<void>> res;
   for (int i = 0; i < 8; i++) {
-    thread_pool.send(print_1());
+    res.push_back(thread_pool.send(print_1()));
     print_1_cnt++;
   }
 
   for (int i = 0; i < 4; i++) {
-    thread_pool.send(print_2);
+    res.push_back(thread_pool.send(print_2));
   }
+
+  for (auto &r : res)
+    r.get();
 }
