@@ -5,7 +5,7 @@ INC_DIR         := include/
 OBJ_DIR         := objs/
 
 CC              := g++-10
-CCFLAGS         := -I$(INC_DIR) -std=c++17 -Ofast -DVERBOSE -pthread -lpthread -g3 
+CCFLAGS         := -I$(INC_DIR) -std=c++17 -Ofast -pthread -g3 
 
 SRC_FILES       := $(shell find $(SRC_DIR) -type f -name '*.cpp')
 OBJ_FILES       := $(patsubst $(SRC_DIR)%.cpp,$(OBJ_DIR)%.o,$(SRC_FILES))
