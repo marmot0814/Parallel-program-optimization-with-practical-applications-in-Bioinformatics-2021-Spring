@@ -22,7 +22,7 @@ class BandedSmithWaterman : public BaseSmithWaterman {
         else
           curv = std::max(curv, dp.get(i - 1, j - 1) + mismatch);
         if (curv > maxv)
-          maxi = i, maxj = j;
+          maxi = i, maxj = j, maxv = curv;
         *dp.ptr(i, j) = curv;
       }
     }
