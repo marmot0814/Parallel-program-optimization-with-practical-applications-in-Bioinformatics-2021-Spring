@@ -3,7 +3,7 @@
 #include <vector>
 #include <iostream>
 
-#include "types/sequence.h"
+#include "types/sequence/sequence.h"
 
 class FASTA : public std::vector<Sequence> {
  public:

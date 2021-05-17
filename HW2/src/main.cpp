@@ -3,7 +3,10 @@
 #include <iostream>
 #include <iomanip>
 
-#include "types/sequence.h"
+#include "types/table/table.h"
+#include "types/table/striped_table.h"
+#include "types/sequence/sequence.h"
+#include "types/sequence/striped_sequence.h"
 #include "types/fasta.h"
 #include "types/blast.h"
 
@@ -11,73 +14,11 @@
 
 using namespace simdpp::arch_avx2;
 
-class Table : public std::vector<std::vector<int>> {
- protected:
-  int n, m;
- public:
-  Table(
-    int n, int m
-  ) : std::vector<std::vector<int>>(n, std::vector<int>(m, 0)), n(n), m(m) {
-    assert(n > 0 && m > 0);
-  }
-  int get(int i, int j) const {
-    if (i < 0 || j < 0) return 0;
-    return (*this)[i][j];
-  }
-  int* ptr(int i, int j) {
-    assert(0 <= i && i < n);
-    assert(0 <= j && j < m);
-    return (*this)[i].data() + j;
-  };
-};
-
-class StripedTable : public Table {
-  int striped(int i) const {
-    if (i < 0) return i;
-    const int p = SIMDPP_FAST_INT32_SIZE;
-    const int t = m / p;
-    return i % t * p + i / t;
-  }
-
- public:
-  StripedTable(int n, int m)
-    : Table(n, (m + SIMDPP_FAST_INT32_SIZE - 1) / SIMDPP_FAST_INT32_SIZE * SIMDPP_FAST_INT32_SIZE) {}
-
-  int get(int i, int j) const {
-    return Table::get(i, striped(j));
-  }
-  int* ptr(int i, int j) {
-    return Table::ptr(i, j);
-  }
-};
-
-struct StripedSequence : public Sequence {
-
-  int striped(int i) const {
-    if (i < 0) return i;
-    const int p = SIMDPP_FAST_INT32_SIZE;
-    const int t = size() / p;
-    return i % p * t + i / p;
-  }
-
- public:
-  StripedSequence(const Sequence &seq) : Sequence(seq) {}
-   
-  char striped_get(int i) const {
-    return Sequence::get(striped(i));
-  }
-
-  int size() const {
-    const int p = SIMDPP_FAST_INT32_SIZE;
-    return (Sequence::size() + p - 1) / p * p;
-  }
-};
-
 class BaseSmithWaterman {
  protected:
   int match, mismatch, indel;
 
-  int c2i(char c) {
+  int c2i(char c) const {
     switch (c) {
       case 'A': return 0;
       case 'C': return 1;
@@ -86,7 +27,8 @@ class BaseSmithWaterman {
       default: assert(false);
     }
   }
-  char i2c(int i) {
+
+  char i2c(int i) const {
     switch (i) {
       case 0: return 'A';
       case 1: return 'C';
@@ -140,6 +82,14 @@ class BaseSmithWaterman {
 };
 
 class StripedSmithWaterman : public BaseSmithWaterman {
+  std::vector<std::vector<int>> prepare_match_mismatch(const StripedSequence &Q) {
+    std::vector<std::vector<int>> W(4, std::vector<int>(Q.size()));
+    for (int i = 0; i < 4; i++)
+      for (int j = 0; j < (int)Q.size(); j++)
+        W[i][j] = (Q.striped_get(j) == i2c(i) ? match : mismatch);
+    return W;
+  }
+
  public:
   StripedSmithWaterman(
     int match, int mismatch, int indel
@@ -150,13 +100,8 @@ class StripedSmithWaterman : public BaseSmithWaterman {
     const Sequence &_Q
   ) {
     const auto Q = StripedSequence(_Q);
-
     auto dp = StripedTable(D.size(), Q.size());
-  
-    std::vector<std::vector<int>> W(4, std::vector<int>(Q.size()));
-    for (int i = 0; i < 4; i++)
-      for (int j = 0; j < (int)Q.size(); j++)
-        W[i][j] = (Q.striped_get(j) == i2c(i) ? match : mismatch);
+    auto match_mismatch = prepare_match_mismatch(Q);
 
     const int p = SIMDPP_FAST_INT32_SIZE;
     const int t = Q.size() / p;
@@ -171,31 +116,27 @@ class StripedSmithWaterman : public BaseSmithWaterman {
       for (int j = 0; j < t; j++)
         reg[j] = max(reg[j], prev[j] + all_indel);
 
-      int *W_ptr = W[c2i(D[i])].data();
+      int *match_mismatch_ptr = match_mismatch[c2i(D[i])].data();
       for (int j = 1; j < t; j++) {
-        int32<p> w = load_u(W_ptr + j * p);
-        reg[j] = max(reg[j], prev[j - 1] + w);
+        int32<p> all_match_mismatch = load_u(match_mismatch_ptr + j * p);
+        reg[j] = max(reg[j], prev[j - 1] + all_match_mismatch);
       }
 
-      int32<p> w = load_u(W_ptr);
-      std::vector<int> tmp(p + 1, 0);
-      store_u(tmp.data() + 1, prev[t - 1]);
-      int32<p> checker = load_u(tmp.data());
-      reg[0] = max(reg[0], checker + w);
+      auto reg_right_shift = [&](const int32<p> &reg) {
+        std::vector<int> tmp(p + 1, 0);
+        store_u(tmp.data() + 1, reg);
+        int32<p> ret = load_u(tmp.data());
+        return ret;
+      };
+
+      reg[0] = max(reg[0], reg_right_shift(prev[t - 1]) + int32<p>(load_u(match_mismatch_ptr)));
 
       while (1) {
         for (int j = 1; j < t; j++)
           reg[j] = max(reg[j], reg[j - 1] + all_indel);
-
-        std::vector<int> tmp(p + 1, 0);
-        store_u(tmp.data() + 1, reg[t - 1]);
-        int32<p> checker = load_u(tmp.data());
-
-        int32<p> checked = reg[0];
-
+        int32<p> checker = reg_right_shift(reg[t - 1]), checked = reg[0];
         if (not reduce_or(max(all_zero, checker + all_indel - checked)))
           break;
-
         reg[0] = max(reg[0], checker + all_indel);
       }
 
@@ -233,20 +174,20 @@ class BandedSmithWaterman : public BaseSmithWaterman {
     const Sequence &D,
     const Sequence &Q
   ) {
+    int maxi = 0, maxj = 0, maxv = 0;
     auto dp = Table(D.size(), Q.size());
     for (int i = 0; i < (int)D.size(); i++) {
       for (int j = 0; j < (int)Q.size(); j++) {
-        *dp.ptr(i, j) = std::max(dp.get(i, j), dp.get(i - 1, j - 1) + (D.get(i) == Q.get(j) ? match : mismatch));
-        *dp.ptr(i, j) = std::max(dp.get(i, j), std::max(dp.get(i, j - 1), dp.get(i - 1, j)) + indel);
+        int curv = std::max(dp.get(i, j - 1), dp.get(i - 1, j)) + indel;
+        if (D.get(i) == Q.get(j))
+          curv = std::max(curv, dp.get(i - 1, j - 1) + match);
+        else
+          curv = std::max(curv, dp.get(i - 1, j - 1) + mismatch);
+        if (curv > maxv)
+          maxi = i, maxj = j;
+        *dp.ptr(i, j) = curv;
       }
     }
-
-    int maxi = 0, maxj = 0;
-    for (int i = 0; i < (int)D.size(); i++)
-      for (int j = 0; j < (int)Q.size(); j++)
-        if (dp.get(i, j) > dp.get(maxi, maxj))
-          maxi = i, maxj = j;
-
     return backtrack(maxi, maxj, D, Q, dp);
   }
 };

@@ -1,7 +1,7 @@
 #pragma once
 #include <iostream>
 
-#include "types/sequence.h"
+#include "types/sequence/sequence.h"
 
 class BLAST {
   Sequence seq1, seq2;

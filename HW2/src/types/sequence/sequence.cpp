@@ -1,7 +1,7 @@
 #include <iomanip>
 #include <cassert>
 
-#include "types/sequence.h"
+#include "types/sequence/sequence.h"
 
 Sequence::Sequence(
   const std::string &name,
